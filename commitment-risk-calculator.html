@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Commitment & Risk Calculator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .number-input::-webkit-outer-spin-button, .number-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .number-input { -moz-appearance: textfield; }
+    .tooltip {
+      position: relative;
+      cursor: help;
+      border-bottom: 1px dotted #94a3b8;
+      display: inline-block;
+    }
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 260px;
+      background-color: rgba(30, 41, 59, 0.9);
+      color: #fff;
+      text-align: left;
+      border-radius: 8px;
+      padding: 8px;
+      position: absolute;
+      z-index: 10;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -130px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      font-size: 12px;
+    }
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-6xl mx-auto p-6 space-y-6">
+    <header class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Commitment & Risk Calculator</h1>
+        <p class="text-slate-600">Interactive tool to show outstanding commitment and risk metrics assuming fully mature spend-based CUD ladders.</p>
+      </div>
+      <div class="hidden md:flex items-center gap-2">
+        <button id="resetBtn" class="px-3 py-2 rounded-xl bg-slate-200 hover:bg-slate-300">Reset</button>
+        <button id="printBtn" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">Print</button>
+      </div>
+    </header>
+    <p style='text-align:center;color:#888;'>Generated HTML ready to host or share.</p>
+  </div>
+</body>
+</html>

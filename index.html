@@ -88,7 +88,11 @@
             until the last commitment expires.
           </p>
           
-          <canvas id="commitmentChart" class="mt-4" height="400"></canvas>
+          
+          <div class="relative mt-4" style="height: 450px;">
+            <canvas id="commitmentChart"></canvas>
+          </div>
+
         </div>
       </section>
 
@@ -283,7 +287,7 @@
       </section>
 
       <footer class="text-center text-xs text-slate-500 py-6">
-        v2.0 · Built for scenario testing & portfolio analysis
+        v2.1 · Built for scenario testing & portfolio analysis
       </footer>
     </div>
 
@@ -462,7 +466,6 @@
         }
 
         for (let i = 1; i < lines.length; i++) {
-          // Handle potential commas inside quoted fields (basic)
           const values = lines[i].split(',');
           if (values.length >= headers.length) { 
             const state = values[stateIndex].trim().replace(/\r$/, '');
@@ -507,28 +510,18 @@
         const labels = [];
         const dataPoints = [];
 
-        // Loop from today until the last CUD expires
         for (
-          // Create a new date object for the loop
           let d = new Date(today.getTime());
           d <= maxEndDate;
           d.setDate(d.getDate() + 1)
         ) {
           let totalOutstandingForDate = 0;
-          // Create a new date object for comparison in the inner loop
           const currentDate = new Date(d.getTime()); 
 
           for (const commit of activeCommitments) {
-            // Only count if the commitment expires *after* the current date
             if (commit.EndTime > currentDate) {
-              
-              // Calculate remaining days
               const diffTime = commit.EndTime.getTime() - currentDate.getTime();
-              
-              // +1ms to handle rounding precisely to the day
               const diffDays = Math.ceil((diffTime + 1) / MS_PER_DAY); 
-              
-              // Formula: (hourly rate) * (days) * (24 hr/day)
               totalOutstandingForDate += commit.ActiveCommitment * diffDays * 24;
             }
           }
@@ -561,13 +554,15 @@
                 backgroundColor: 'rgba(79, 70, 229, 0.1)',
                 fill: true,
                 tension: 0.1,
-                pointRadius: 0, // No dots on the line
+                pointRadius: 0, 
               },
             ],
           },
           options: {
             responsive: true,
-            maintainAspectRatio: false, // Allows chart to fill container height
+            // CHANGED: This is key. It tells the chart to fill its
+            // parent div, which we've given a fixed height.
+            maintainAspectRatio: false, 
             scales: {
               x: {
                 type: 'time',
@@ -586,19 +581,34 @@
                   text: 'Outstanding Commitment ($)',
                 },
                 ticks: {
-                  // Format Y-axis labels as currency
                   callback: (value) => fmtCurrency(value),
                 },
+                // --- To set a FIXED Y-axis ---
+                // Uncomment the line below and set your desired max.
+                // This is generally NOT recommended as data might go off the chart.
+                // max: 5000000, 
+                beginAtZero: true
               },
             },
             plugins: {
+              // CHANGED: Updated tooltip callbacks
               tooltip: {
                 callbacks: {
-                  // Format tooltip labels as currency
-                  label: (context) =>
-                    `Outstanding: ${fmtCurrency(context.parsed.y)}`,
-                },
-              },
+                  // This formats the title (the date)
+                  title: (tooltipItems) => {
+                    const date = tooltipItems[0].parsed.x;
+                    return 'Date: ' + new Date(date).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric'
+                    });
+                  },
+                  // This formats the body label
+                  label: (context) => {
+                    return `Total Remaining Commitment: ${fmtCurrency(context.parsed.y)}`;
+                  }
+                }
+              }
             },
           },
         });

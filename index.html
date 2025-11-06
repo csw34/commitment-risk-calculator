@@ -1,82 +1,230 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Commitment & Risk Calculator</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-</head>
-<body class="bg-slate-50 text-slate-900">
-  <div class="max-w-6xl mx-auto p-6 space-y-6">
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Commitment & Risk Calculator</h1>
-        <p class="text-slate-600">Import your CUD portfolio CSV to visualize remaining commitment outstanding over time.</p>
-      </div>
-      <div>
-        <input id="csvFile" type="file" accept=".csv" class="block text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-      </div>
-    </header>
+<script>
+  const fmtCurrency = (n) => n == null ? '—' : n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-    <canvas id="commitmentChart" class="w-full h-80 bg-white rounded-2xl shadow p-5"></canvas>
-  </div>
+  const el = {
+    monthlyUsage: document.getElementById('monthlyUsage'),
+    maxCoverage: document.getElementById('maxCoverage'),
+    maxCoverageNum: document.getElementById('maxCoverageNum'),
+    threeYrPortion: document.getElementById('threeYrPortion'),
+    threeYrPortionNum: document.getElementById('threeYrPortionNum'),
+    disc1: document.getElementById('disc1'),
+    disc3: document.getElementById('disc3'),
+    dur1: document.getElementById('dur1'),
+    dur3: document.getElementById('dur3'),
+    kpiMonthlyCommit: document.getElementById('kpiMonthlyCommit'),
+    kpiOutstanding: document.getElementById('kpiOutstanding'),
+    kpiBreakeven: document.getElementById('kpiBreakeven'),
+    csvFile: document.getElementById('csvFile'),
+    chartCanvas: document.getElementById('distChart')
+  };
 
-  <script>
-    const ctx = document.getElementById('commitmentChart').getContext('2d');
-    let chart;
+  /* -------------------- Your existing KPI math (unchanged) -------------------- */
+  function calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct }) {
+    const threeYrPortion = threeYrPct / 100;
+    const oneYrPortion = 1 - threeYrPortion;
+    const coverage = maxCoverageTarget / 100;
+    return (monthlyUsage * coverage) * (1 - disc1 / 100) * oneYrPortion
+         + (monthlyUsage * coverage) * (1 - disc3 / 100) * threeYrPortion;
+  }
 
-    // CSV parsing helper
-    function parseCSV(text) {
-      const lines = text.trim().split('\n');
-      const headers = lines[0].split('\t');
-      return lines.slice(1).map(line => {
-        const values = line.split('\t');
-        const row = {};
-        headers.forEach((h, i) => row[h.trim()] = values[i]?.trim());
-        return row;
-      });
+  function calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct }) {
+    const threeYrPortion = threeYrPct / 100;
+    const oneYrPortion = 1 - threeYrPortion;
+    return totalMonthlyCommit * ((dur1 * oneYrPortion) + (dur3 * threeYrPortion));
+  }
+
+  function calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 }) {
+    const threeYrPortion = threeYrPct / 100;
+    const oneYrPortion = 1 - threeYrPortion;
+    return ((1 - disc1 / 100) * oneYrPortion * dur1) + ((1 - disc3 / 100) * threeYrPortion * dur3);
+  }
+
+  function syncSliders(rangeEl, numberEl, updateFn) {
+    rangeEl.addEventListener('input', () => { numberEl.value = rangeEl.value; updateFn(); });
+    numberEl.addEventListener('input', () => {
+      let val = Number(numberEl.value);
+      if (isNaN(val)) val = 0;
+      val = Math.max(0, Math.min(100, val));
+      rangeEl.value = val;
+      numberEl.value = val;
+      updateFn();
+    });
+  }
+
+  function update() {
+    const monthlyUsage = Number(el.monthlyUsage.value) || 0;
+    const maxCoverageTarget = Number(el.maxCoverageNum.value) || 0;
+    const threeYrPct = Number(el.threeYrPortionNum.value) || 0;
+    const disc1 = Number(el.disc1.value) || 0;
+    const disc3 = Number(el.disc3.value) || 0;
+    const dur1 = Number(el.dur1.value) || 0;
+    const dur3 = Number(el.dur3.value) || 0;
+
+    const totalMonthlyCommit = calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct });
+    const totalOutstanding = calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct });
+    const breakeven = calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 });
+
+    el.kpiMonthlyCommit.textContent = fmtCurrency(totalMonthlyCommit);
+    el.kpiOutstanding.textContent = fmtCurrency(totalOutstanding);
+    el.kpiBreakeven.textContent = breakeven.toFixed(2) + ' months';
+  }
+
+  syncSliders(el.maxCoverage, el.maxCoverageNum, update);
+  syncSliders(el.threeYrPortion, el.threeYrPortionNum, update);
+  ['monthlyUsage','disc1','disc3','dur1','dur3'].forEach(id => el[id].addEventListener('input', update));
+  update();
+
+  /* -------------------- NEW: CSV import + line chart -------------------- */
+
+  // Robust date parser for YYYY-MM-DD without timezone drift
+  const parseYMD = (s) => {
+    if (!s) return null;
+    const m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) {
+      // fallback to Date if not Y-M-D
+      const d = new Date(s);
+      return isNaN(d) ? null : d;
     }
+    const [_, y, mo, d] = m;
+    return new Date(Number(y), Number(mo) - 1, Number(d)); // local date at midnight
+  };
 
-    // Calculate remaining commitment outstanding per day
-    function calculateOutstanding(data) {
-      const today = new Date();
-      const endDates = data
-        .filter(d => d.State === "Active" && d["End Time"])
-        .map(d => new Date(d["End Time"]));
-      const maxEnd = new Date(Math.max(...endDates.map(d => d.getTime())));
+  // Detect delimiter (tab first, then comma)
+  function detectDelimiter(headerLine) {
+    if (headerLine.includes('\t')) return '\t';
+    return ',';
+  }
 
-      const dailyData = [];
-      const oneDay = 24 * 60 * 60 * 1000;
+  // Simple CSV/TSV parser (handles tabs or commas, trims cells)
+  function parseDelimited(text) {
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim().length > 0);
+    if (lines.length === 0) return [];
+    const delimiter = detectDelimiter(lines[0]);
+    const headers = lines[0].split(delimiter).map(h => h.trim());
 
-      for (let d = new Date(today); d <= maxEnd; d = new Date(d.getTime() + oneDay)) {
-        let total = 0;
-        data.forEach(row => {
-          if (row.State === "Active" && new Date(row["End Time"]) > d) {
-            const end = new Date(row["End Time"]);
-            const daysLeft = (end - d) / oneDay;
-            const activeCommit = parseFloat(row["Active Commitment"]) || 0;
-            total += activeCommit * daysLeft * 24; // hours left
-          }
-        });
-        dailyData.push({ date: d.toISOString().split('T')[0], outstanding: total });
+    return lines.slice(1).map(line => {
+      const cells = line.split(delimiter).map(v => v.trim());
+      const row = {};
+      headers.forEach((h, i) => row[h] = (cells[i] ?? '').trim());
+      return row;
+    });
+  }
+
+  // Compute remaining commitment outstanding for each date
+  // Formula: sum over Active rows where End Time > date: (Active Commitment * days_to_expiration * 24)
+  function computeDailyOutstanding(rows, startDate) {
+    const active = rows.filter(r => String(r.State).trim().toLowerCase() === 'active');
+    if (active.length === 0) return [];
+
+    // Parse end dates and filter out invalid
+    const withEnds = active.map(r => ({
+      ...r,
+      end: parseYMD(r['End Time']),
+      activeCommit: Number(r['Active Commitment']) || 0
+    })).filter(r => r.end instanceof Date && !isNaN(r.end));
+
+    if (withEnds.length === 0) return [];
+
+    const maxEnd = new Date(Math.max(...withEnds.map(r => r.end.getTime())));
+    const oneDay = 24 * 60 * 60 * 1000;
+
+    // Start from either provided startDate or today
+    const today = startDate ? new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
+                            : new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+
+    const points = [];
+    for (let d = new Date(today); d <= maxEnd; d = new Date(d.getTime() + oneDay)) {
+      let total = 0;
+      for (const r of withEnds) {
+        if (r.end > d) {
+          const daysLeft = (r.end - d) / oneDay; // fractional days ok at midnight alignment
+          total += r.activeCommit * daysLeft * 24; // hours remaining
+        }
       }
-      return dailyData;
+      points.push({ date: new Date(d), value: total });
+    }
+    return points;
+  }
+
+  let distLineChart = null;
+
+  function renderLineChart(points) {
+    const labels = points.map(p => p.date.toISOString().slice(0,10));
+    const values = points.map(p => p.value);
+
+    if (distLineChart) {
+      distLineChart.destroy();
     }
 
-    // Render Chart.js line chart
-    function renderChart(dailyData) {
-      const labels = dailyData.map(d => d.date);
-      const values = dailyData.map(d => d.outstanding);
+    distLineChart = new Chart(el.chartCanvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Remaining Commitment Outstanding (hours)',
+          data: values,
+          fill: true,
+          borderWidth: 2,
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              callback: (v) => Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(v)
+            },
+            title: { display: true, text: 'Hours remaining' }
+          },
+          x: {
+            title: { display: true, text: 'Date' }
+          }
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const hours = ctx.parsed.y;
+                return ` ${hours.toLocaleString()} hrs`;
+              }
+            }
+          },
+          legend: { display: true }
+        }
+      }
+    });
+  }
 
-      if (chart) chart.destroy();
-      chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: 'Remaining Commitment Outstanding (hours)',
-            data: values,
-            borderWidth: 2,
-            tension: 0.2,
-            borderCol
+  // Hook up file input
+  if (el.csvFile) {
+    el.csvFile.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const text = String(evt.target.result || '');
+        const rows = parseDelimited(text);
+
+        // Validate minimum required columns
+        const required = ['Active Commitment', 'State', 'End Time'];
+        const hasAll = required.every(h => Object.prototype.hasOwnProperty.call(rows[0] || {}, h));
+        if (!hasAll) {
+          alert('CSV missing required columns: Active Commitment, State, End Time');
+          return;
+        }
+
+        const points = computeDailyOutstanding(rows /*, optional custom start date */);
+        if (points.length === 0) {
+          alert('No valid Active rows with End Time found.');
+          return;
+        }
+        renderLineChart(points);
+      };
+      reader.readAsText(file);
+    });
+  }
+</script>

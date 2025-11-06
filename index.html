@@ -6,203 +6,77 @@
   <title>Commitment & Risk Calculator</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    .number-input::-webkit-outer-spin-button, .number-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-    .number-input { -moz-appearance: textfield; }
-    .tooltip {
-      position: relative;
-      cursor: help;
-      border-bottom: 1px dotted #94a3b8;
-      display: inline-block;
-    }
-    .tooltip .tooltiptext {
-      visibility: hidden;
-      width: 260px;
-      background-color: rgba(30, 41, 59, 0.9);
-      color: #fff;
-      text-align: left;
-      border-radius: 8px;
-      padding: 8px;
-      position: absolute;
-      z-index: 10;
-      bottom: 125%;
-      left: 50%;
-      margin-left: -130px;
-      opacity: 0;
-      transition: opacity 0.2s;
-      font-size: 12px;
-    }
-    .tooltip:hover .tooltiptext {
-      visibility: visible;
-      opacity: 1;
-    }
-  </style>
 </head>
 <body class="bg-slate-50 text-slate-900">
   <div class="max-w-6xl mx-auto p-6 space-y-6">
     <header class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl md:text-3xl font-bold tracking-tight">Commitment & Risk Calculator</h1>
-        <p class="text-slate-600">Interactive tool to show outstanding commitment and risk metrics assuming fully mature spend-based CUD ladders.</p>
+        <p class="text-slate-600">Import your CUD portfolio CSV to visualize remaining commitment outstanding over time.</p>
       </div>
-      <div class="hidden md:flex items-center gap-2">
+      <div>
+        <input id="csvFile" type="file" accept=".csv" class="block text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
       </div>
     </header>
 
-    <section class="grid md:grid-cols-2 gap-6">
-      <div class="bg-white rounded-2xl shadow p-5 space-y-4">
-        <h2 class="text-lg font-semibold">Inputs</h2>
-        <div class="space-y-3">
-          <label class="block text-sm font-medium">Monthly Usage ($)</label>
-          <input id="monthlyUsage" type="number" inputmode="decimal" min="0" step="0.01" value="50000" class="number-input w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-right" />
-
-          <div>
-            <label class="block text-sm font-medium">Max Coverage Target (%)</label>
-            <div class="flex items-center gap-3">
-              <input id="maxCoverage" type="range" min="0" max="100" step="1" value="100" class="w-full" />
-              <input id="maxCoverageNum" type="number" min="0" max="100" step="1" value="100" class="number-input w-20 px-3 py-2 rounded-xl border border-slate-300" />
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium">3-Year Portfolio Target (%)</label>
-            <div class="flex items-center gap-3">
-              <input id="threeYrPortion" type="range" min="0" max="100" step="1" value="75" class="w-full" />
-              <input id="threeYrPortionNum" type="number" min="0" max="100" step="1" value="75" class="number-input w-20 px-3 py-2 rounded-xl border border-slate-300" />
-            </div>
-            <p class="text-xs text-slate-500">Portion of total commitment allocated to 3-year term (remainder to 1-year).</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="bg-white rounded-2xl shadow p-5 space-y-4">
-        <h2 class="text-lg font-semibold">Assumptions</h2>
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm font-medium">1-Year Discount Rate (%)</label>
-            <input id="disc1" type="number" min="0" max="100" step="0.1" value="28" class="number-input w-full px-3 py-2 rounded-xl border border-slate-300" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium">3-Year Discount Rate (%)</label>
-            <input id="disc3" type="number" min="0" max="100" step="0.1" value="46" class="number-input w-full px-3 py-2 rounded-xl border border-slate-300" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium tooltip">1-Year Weighted Avg Duration (months)
-              <span class="tooltiptext">The weighted average duration assuming a fully mature 1-year ladder</span>
-            </label>
-            <input id="dur1" type="number" min="1" step="1" value="6" class="number-input w-full px-3 py-2 rounded-xl border border-slate-300" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium tooltip">3-Year Weighted Avg Duration (months)
-              <span class="tooltiptext">The weighted average duration assuming a fully mature 3-year ladder</span>
-            </label>
-            <input id="dur3" type="number" min="1" step="1" value="18" class="number-input w-full px-3 py-2 rounded-xl border border-slate-300" />
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="grid md:grid-cols-3 gap-6">
-      <div class="bg-white rounded-2xl shadow p-5">
-        <h3 class="text-sm font-medium text-slate-500 tooltip">Total Monthly Commitment
-          <span class="tooltiptext">(Monthly Usage × Max Coverage Target) × (1 − 1-Year Discount Rate) × (1 − 3-Year Portfolio Target) + (Monthly Usage × Max Coverage Target) × (1 − 3-Year Discount Rate) × (3-Year Portfolio Target)</span>
-        </h3>
-        <div id="kpiMonthlyCommit" class="text-2xl font-semibold mt-1">$0</div>
-      </div>
-      <div class="bg-white rounded-2xl shadow p-5">
-        <h3 class="text-sm font-medium text-slate-500 tooltip">Total Outstanding Commitment
-          <span class="tooltiptext">Total Monthly Commitment × ((1-Year Weighted Avg Duration) × (1 − 3-Year Portfolio Target) + (3-Year Weighted Avg Duration) × (3-Year Portfolio Target))</span>
-        </h3>
-        <div id="kpiOutstanding" class="text-2xl font-semibold mt-1">$0</div>
-      </div>
-      <div class="bg-white rounded-2xl shadow p-5">
-        <h3 class="text-sm font-medium text-slate-500 tooltip">Break-even
-          <span class="tooltiptext">(1 − 1-Year Discount Rate) × (1 − 3-Year Portfolio Target) × (1Yr WAD) + (1 − 3-Year Discount Rate) × (3-Year Portfolio Target) × (3Yr WAD)</span>
-        </h3>
-        <div id="kpiBreakeven" class="text-2xl font-semibold mt-1">—</div>
-      </div>
-    </section>
-
-    <canvas id="distChart" class="mt-4"></canvas>
-
-    <footer class="text-center text-xs text-slate-500 py-6">v1.0 · Built for quick scenario testing</footer>
+    <canvas id="commitmentChart" class="w-full h-80 bg-white rounded-2xl shadow p-5"></canvas>
   </div>
 
   <script>
-    const fmtCurrency = (n) => n == null ? '—' : n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+    const ctx = document.getElementById('commitmentChart').getContext('2d');
+    let chart;
 
-    const el = {
-      monthlyUsage: document.getElementById('monthlyUsage'),
-      maxCoverage: document.getElementById('maxCoverage'),
-      maxCoverageNum: document.getElementById('maxCoverageNum'),
-      threeYrPortion: document.getElementById('threeYrPortion'),
-      threeYrPortionNum: document.getElementById('threeYrPortionNum'),
-      disc1: document.getElementById('disc1'),
-      disc3: document.getElementById('disc3'),
-      dur1: document.getElementById('dur1'),
-      dur3: document.getElementById('dur3'),
-      kpiMonthlyCommit: document.getElementById('kpiMonthlyCommit'),
-      kpiOutstanding: document.getElementById('kpiOutstanding'),
-      kpiBreakeven: document.getElementById('kpiBreakeven')
-    };
-
-    function calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct }) {
-      const threeYrPortion = threeYrPct / 100;
-      const oneYrPortion = 1 - threeYrPortion;
-      const coverage = maxCoverageTarget / 100;
-      return (monthlyUsage * coverage) * (1 - disc1 / 100) * oneYrPortion + (monthlyUsage * coverage) * (1 - disc3 / 100) * threeYrPortion;
-    }
-
-    function calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct }) {
-      const threeYrPortion = threeYrPct / 100;
-      const oneYrPortion = 1 - threeYrPortion;
-      return totalMonthlyCommit * ((dur1 * oneYrPortion) + (dur3 * threeYrPortion));
-    }
-
-    function calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 }) {
-      const threeYrPortion = threeYrPct / 100;
-      const oneYrPortion = 1 - threeYrPortion;
-      return ((1 - disc1 / 100) * oneYrPortion * dur1) + ((1 - disc3 / 100) * threeYrPortion * dur3);
-    }
-
-    function syncSliders(rangeEl, numberEl, updateFn) {
-      rangeEl.addEventListener('input', () => { numberEl.value = rangeEl.value; updateFn(); });
-      numberEl.addEventListener('input', () => {
-        let val = Number(numberEl.value);
-        if (isNaN(val)) val = 0;
-        val = Math.max(0, Math.min(100, val));
-        rangeEl.value = val;
-        numberEl.value = val;
-        updateFn();
+    // CSV parsing helper
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split('\t');
+      return lines.slice(1).map(line => {
+        const values = line.split('\t');
+        const row = {};
+        headers.forEach((h, i) => row[h.trim()] = values[i]?.trim());
+        return row;
       });
     }
 
-    function update() {
-      const monthlyUsage = Number(el.monthlyUsage.value) || 0;
-      const maxCoverageTarget = Number(el.maxCoverageNum.value) || 0;
-      const threeYrPct = Number(el.threeYrPortionNum.value) || 0;
-      const disc1 = Number(el.disc1.value) || 0;
-      const disc3 = Number(el.disc3.value) || 0;
-      const dur1 = Number(el.dur1.value) || 0;
-      const dur3 = Number(el.dur3.value) || 0;
+    // Calculate remaining commitment outstanding per day
+    function calculateOutstanding(data) {
+      const today = new Date();
+      const endDates = data
+        .filter(d => d.State === "Active" && d["End Time"])
+        .map(d => new Date(d["End Time"]));
+      const maxEnd = new Date(Math.max(...endDates.map(d => d.getTime())));
 
-      const totalMonthlyCommit = calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct });
-      const totalOutstanding = calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct });
-      const breakeven = calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 });
+      const dailyData = [];
+      const oneDay = 24 * 60 * 60 * 1000;
 
-      el.kpiMonthlyCommit.textContent = fmtCurrency(totalMonthlyCommit);
-      el.kpiOutstanding.textContent = fmtCurrency(totalOutstanding);
-      el.kpiBreakeven.textContent = breakeven.toFixed(2) + ' months';
+      for (let d = new Date(today); d <= maxEnd; d = new Date(d.getTime() + oneDay)) {
+        let total = 0;
+        data.forEach(row => {
+          if (row.State === "Active" && new Date(row["End Time"]) > d) {
+            const end = new Date(row["End Time"]);
+            const daysLeft = (end - d) / oneDay;
+            const activeCommit = parseFloat(row["Active Commitment"]) || 0;
+            total += activeCommit * daysLeft * 24; // hours left
+          }
+        });
+        dailyData.push({ date: d.toISOString().split('T')[0], outstanding: total });
+      }
+      return dailyData;
     }
 
-    syncSliders(el.maxCoverage, el.maxCoverageNum, update);
-    syncSliders(el.threeYrPortion, el.threeYrPortionNum, update);
+    // Render Chart.js line chart
+    function renderChart(dailyData) {
+      const labels = dailyData.map(d => d.date);
+      const values = dailyData.map(d => d.outstanding);
 
-    ['monthlyUsage','disc1','disc3','dur1','dur3'].forEach(id => {
-      el[id].addEventListener('input', update);
-    });
-
-    update();
-  </script>
-</body>
-</html>
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Remaining Commitment Outstanding (hours)',
+            data: values,
+            borderWidth: 2,
+            tension: 0.2,
+            borderCol

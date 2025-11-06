@@ -161,12 +161,12 @@
 
         // Find required column indices
         const stateIndex = headers.indexOf('State');
-        const priceIndex = headers.indexOf('Price'); // CHANGED from 'Commitment Fee'
+        const priceIndex = headers.indexOf('Active Commitment'); // CHANGED from 'Commitment Fee'
         const endIndex = headers.indexOf('End Time');
 
         if (stateIndex === -1 || priceIndex === -1 || endIndex === -1) {
           throw new Error(
-            'CSV must contain "State", "Price", and "End Time" columns.' // UPDATED error message
+            'CSV must contain "State", "Active Commitment", and "End Time" columns.' // UPDATED error message
           );
         }
 

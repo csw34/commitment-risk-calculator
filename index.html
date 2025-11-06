@@ -1,230 +1,591 @@
-<script>
-  const fmtCurrency = (n) => n == null ? '—' : n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-
-  const el = {
-    monthlyUsage: document.getElementById('monthlyUsage'),
-    maxCoverage: document.getElementById('maxCoverage'),
-    maxCoverageNum: document.getElementById('maxCoverageNum'),
-    threeYrPortion: document.getElementById('threeYrPortion'),
-    threeYrPortionNum: document.getElementById('threeYrPortionNum'),
-    disc1: document.getElementById('disc1'),
-    disc3: document.getElementById('disc3'),
-    dur1: document.getElementById('dur1'),
-    dur3: document.getElementById('dur3'),
-    kpiMonthlyCommit: document.getElementById('kpiMonthlyCommit'),
-    kpiOutstanding: document.getElementById('kpiOutstanding'),
-    kpiBreakeven: document.getElementById('kpiBreakeven'),
-    csvFile: document.getElementById('csvFile'),
-    chartCanvas: document.getElementById('distChart')
-  };
-
-  /* -------------------- Your existing KPI math (unchanged) -------------------- */
-  function calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct }) {
-    const threeYrPortion = threeYrPct / 100;
-    const oneYrPortion = 1 - threeYrPortion;
-    const coverage = maxCoverageTarget / 100;
-    return (monthlyUsage * coverage) * (1 - disc1 / 100) * oneYrPortion
-         + (monthlyUsage * coverage) * (1 - disc3 / 100) * threeYrPortion;
-  }
-
-  function calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct }) {
-    const threeYrPortion = threeYrPct / 100;
-    const oneYrPortion = 1 - threeYrPortion;
-    return totalMonthlyCommit * ((dur1 * oneYrPortion) + (dur3 * threeYrPortion));
-  }
-
-  function calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 }) {
-    const threeYrPortion = threeYrPct / 100;
-    const oneYrPortion = 1 - threeYrPortion;
-    return ((1 - disc1 / 100) * oneYrPortion * dur1) + ((1 - disc3 / 100) * threeYrPortion * dur3);
-  }
-
-  function syncSliders(rangeEl, numberEl, updateFn) {
-    rangeEl.addEventListener('input', () => { numberEl.value = rangeEl.value; updateFn(); });
-    numberEl.addEventListener('input', () => {
-      let val = Number(numberEl.value);
-      if (isNaN(val)) val = 0;
-      val = Math.max(0, Math.min(100, val));
-      rangeEl.value = val;
-      numberEl.value = val;
-      updateFn();
-    });
-  }
-
-  function update() {
-    const monthlyUsage = Number(el.monthlyUsage.value) || 0;
-    const maxCoverageTarget = Number(el.maxCoverageNum.value) || 0;
-    const threeYrPct = Number(el.threeYrPortionNum.value) || 0;
-    const disc1 = Number(el.disc1.value) || 0;
-    const disc3 = Number(el.disc3.value) || 0;
-    const dur1 = Number(el.dur1.value) || 0;
-    const dur3 = Number(el.dur3.value) || 0;
-
-    const totalMonthlyCommit = calcTotalMonthlyCommitment({ monthlyUsage, maxCoverageTarget, disc1, disc3, threeYrPct });
-    const totalOutstanding = calcTotalOutstanding({ totalMonthlyCommit, dur1, dur3, threeYrPct });
-    const breakeven = calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 });
-
-    el.kpiMonthlyCommit.textContent = fmtCurrency(totalMonthlyCommit);
-    el.kpiOutstanding.textContent = fmtCurrency(totalOutstanding);
-    el.kpiBreakeven.textContent = breakeven.toFixed(2) + ' months';
-  }
-
-  syncSliders(el.maxCoverage, el.maxCoverageNum, update);
-  syncSliders(el.threeYrPortion, el.threeYrPortionNum, update);
-  ['monthlyUsage','disc1','disc3','dur1','dur3'].forEach(id => el[id].addEventListener('input', update));
-  update();
-
-  /* -------------------- NEW: CSV import + line chart -------------------- */
-
-  // Robust date parser for YYYY-MM-DD without timezone drift
-  const parseYMD = (s) => {
-    if (!s) return null;
-    const m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) {
-      // fallback to Date if not Y-M-D
-      const d = new Date(s);
-      return isNaN(d) ? null : d;
-    }
-    const [_, y, mo, d] = m;
-    return new Date(Number(y), Number(mo) - 1, Number(d)); // local date at midnight
-  };
-
-  // Detect delimiter (tab first, then comma)
-  function detectDelimiter(headerLine) {
-    if (headerLine.includes('\t')) return '\t';
-    return ',';
-  }
-
-  // Simple CSV/TSV parser (handles tabs or commas, trims cells)
-  function parseDelimited(text) {
-    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim().length > 0);
-    if (lines.length === 0) return [];
-    const delimiter = detectDelimiter(lines[0]);
-    const headers = lines[0].split(delimiter).map(h => h.trim());
-
-    return lines.slice(1).map(line => {
-      const cells = line.split(delimiter).map(v => v.trim());
-      const row = {};
-      headers.forEach((h, i) => row[h] = (cells[i] ?? '').trim());
-      return row;
-    });
-  }
-
-  // Compute remaining commitment outstanding for each date
-  // Formula: sum over Active rows where End Time > date: (Active Commitment * days_to_expiration * 24)
-  function computeDailyOutstanding(rows, startDate) {
-    const active = rows.filter(r => String(r.State).trim().toLowerCase() === 'active');
-    if (active.length === 0) return [];
-
-    // Parse end dates and filter out invalid
-    const withEnds = active.map(r => ({
-      ...r,
-      end: parseYMD(r['End Time']),
-      activeCommit: Number(r['Active Commitment']) || 0
-    })).filter(r => r.end instanceof Date && !isNaN(r.end));
-
-    if (withEnds.length === 0) return [];
-
-    const maxEnd = new Date(Math.max(...withEnds.map(r => r.end.getTime())));
-    const oneDay = 24 * 60 * 60 * 1000;
-
-    // Start from either provided startDate or today
-    const today = startDate ? new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
-                            : new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
-
-    const points = [];
-    for (let d = new Date(today); d <= maxEnd; d = new Date(d.getTime() + oneDay)) {
-      let total = 0;
-      for (const r of withEnds) {
-        if (r.end > d) {
-          const daysLeft = (r.end - d) / oneDay; // fractional days ok at midnight alignment
-          total += r.activeCommit * daysLeft * 24; // hours remaining
-        }
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Commitment & Risk Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <style>
+      .number-input::-webkit-outer-spin-button,
+      .number-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
       }
-      points.push({ date: new Date(d), value: total });
-    }
-    return points;
-  }
-
-  let distLineChart = null;
-
-  function renderLineChart(points) {
-    const labels = points.map(p => p.date.toISOString().slice(0,10));
-    const values = points.map(p => p.value);
-
-    if (distLineChart) {
-      distLineChart.destroy();
-    }
-
-    distLineChart = new Chart(el.chartCanvas, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Remaining Commitment Outstanding (hours)',
-          data: values,
-          fill: true,
-          borderWidth: 2,
-          tension: 0.2
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          y: {
-            beginAtZero: true,
-            ticks: {
-              callback: (v) => Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(v)
-            },
-            title: { display: true, text: 'Hours remaining' }
-          },
-          x: {
-            title: { display: true, text: 'Date' }
-          }
-        },
-        plugins: {
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                const hours = ctx.parsed.y;
-                return ` ${hours.toLocaleString()} hrs`;
-              }
-            }
-          },
-          legend: { display: true }
-        }
+      .number-input {
+        -moz-appearance: textfield;
       }
-    });
-  }
+      .tooltip {
+        position: relative;
+        cursor: help;
+        border-bottom: 1px dotted #94a3b8;
+        display: inline-block;
+      }
+      .tooltip .tooltiptext {
+        visibility: hidden;
+        width: 260px;
+        background-color: rgba(30, 41, 59, 0.9);
+        color: #fff;
+        text-align: left;
+        border-radius: 8px;
+        padding: 8px;
+        position: absolute;
+        z-index: 10;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -130px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        font-size: 12px;
+      }
+      .tooltip:hover .tooltiptext {
+        visibility: visible;
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900">
+    <div class="max-w-6xl mx-auto p-6 space-y-6">
+      <header class="flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl md:text-3xl font-bold tracking-tight">
+            Commitment & Risk Calculator
+          </h1>
+          <p class="text-slate-600">
+            Interactive tool to show outstanding commitment and risk metrics.
+          </p>
+        </div>
+        <div class="hidden md:flex items-center gap-2"></div>
+      </header>
 
-  // Hook up file input
-  if (el.csvFile) {
-    el.csvFile.addEventListener('change', (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+      <section class="bg-white rounded-2xl shadow p-5 space-y-4">
+        <h2 class="text-lg font-semibold">
+          Portfolio Commitment Analysis (from CSV)
+        </h2>
+        <div>
+          <label for="csvFileInput" class="block text-sm font-medium mb-2"
+            >Upload your CUD export CSV</label
+          >
+          <input
+            type="file"
+            id="csvFileInput"
+            accept=".csv"
+            class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+          />
+        </div>
+        <div
+          id="chartContainer"
+          class="bg-white rounded-2xl pt-4"
+          style="display: none"
+        >
+          <h3 class="text-lg font-semibold">
+            Remaining Commitment Outstanding Over Time
+          </h3>
+          <p class="text-sm text-slate-500">
+            Total remaining value of all 'Active' commitments, calculated daily
+            until the last commitment expires.
+          </p>
+          
+          <canvas id="commitmentChart" class="mt-4"></canvas>
+        </div>
+      </section>
 
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        const text = String(evt.target.result || '');
-        const rows = parseDelimited(text);
+      <section>
+        <h2 class="text-xl font-semibold mb-4">
+          Hypothetical Ladder Calculator
+        </h2>
+        <p class="text-slate-600 mb-4">
+          Use this to model a
+          <em
+            >fully mature, hypothetical</em
+          >
+          spend-based CUD ladder.
+        </p>
+        <div class="grid md:grid-cols-2 gap-6">
+          <div class="bg-white rounded-2xl shadow p-5 space-y-4">
+            <h2 class="text-lg font-semibold">Inputs</h2>
+            <div class="space-y-3">
+              <label class="block text-sm font-medium">Monthly Usage ($)</label>
+              <input
+                id="monthlyUsage"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                step="0.01"
+                value="50000"
+                class="number-input w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-right"
+              />
+              <div>
+                <label class="block text-sm font-medium"
+                  >Max Coverage Target (%)</label
+                >
+                <div class="flex items-center gap-3">
+                  <input
+                    id="maxCoverage"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value="100"
+                    class="w-full"
+                  />
+                  <input
+                    id="maxCoverageNum"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value="100"
+                    class="number-input w-20 px-3 py-2 rounded-xl border border-slate-300"
+                  />
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm font-medium"
+                  >3-Year Portfolio Target (%)</label
+                >
+                <div class="flex items-center gap-3">
+                  <input
+                    id="threeYrPortion"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value="75"
+                    class="w-full"
+                  />
+                  <input
+                    id="threeYrPortionNum"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value="75"
+                    class="number-input w-20 px-3 py-2 rounded-xl border border-slate-300"
+                  />
+                </div>
+                <p class="text-xs text-slate-500">
+                  Portion of total commitment allocated to 3-year term
+                  (remainder to 1-year).
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="bg-white rounded-2xl shadow p-5 space-y-4">
+            <h2 class="text-lg font-semibold">Assumptions</h2>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium"
+                  >1-Year Discount Rate (%)</label
+                >
+                <input
+                  id="disc1"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value="28"
+                  class="number-input w-full px-3 py-2 rounded-xl border border-slate-300"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium"
+                  >3-Year Discount Rate (%)</label
+                >
+                <input
+                  id="disc3"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value="46"
+                  class="number-input w-full px-3 py-2 rounded-xl border border-slate-300"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium tooltip"
+                  >1-Year Weighted Avg Duration (months)
+                  <span class="tooltiptext"
+                    >The weighted average duration assuming a fully mature 1-year
+                    ladder</span
+                  >
+                </label>
+                <input
+                  id="dur1"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="6"
+                  class="number-input w-full px-3 py-2 rounded-xl border border-slate-300"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium tooltip"
+                  >3-Year Weighted Avg Duration (months)
+                  <span class="tooltiptext"
+                    >The weighted average duration assuming a fully mature 3-year
+                    ladder</span
+                  >
+                </label>
+                <input
+                  id="dur3"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="18"
+                  class="number-input w-full px-3 py-2 rounded-xl border border-slate-300"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-        // Validate minimum required columns
-        const required = ['Active Commitment', 'State', 'End Time'];
-        const hasAll = required.every(h => Object.prototype.hasOwnProperty.call(rows[0] || {}, h));
-        if (!hasAll) {
-          alert('CSV missing required columns: Active Commitment, State, End Time');
-          return;
-        }
+      <section class="grid md:grid-cols-3 gap-6">
+        <div class="bg-white rounded-2xl shadow p-5">
+          <h3 class="text-sm font-medium text-slate-500 tooltip">
+            Total Monthly Commitment
+            <span class="tooltiptext"
+              >(Monthly Usage × Max Coverage Target) × (1 − 1-Year Discount Rate)
+              × (1 − 3-Year Portfolio Target) + (Monthly Usage × Max Coverage
+              Target) × (1 − 3-Year Discount Rate) × (3-Year Portfolio
+              Target)</span
+            >
+          </h3>
+          <div id="kpiMonthlyCommit" class="text-2xl font-semibold mt-1">
+            $0
+          </div>
+        </div>
+        <div class="bg-white rounded-2xl shadow p-5">
+          <h3 class="text-sm font-medium text-slate-500 tooltip">
+            Total Outstanding Commitment
+            <span class="tooltiptext"
+              >Total Monthly Commitment × ((1-Year Weighted Avg Duration) × (1 −
+              3-Year Portfolio Target) + (3-Year Weighted Avg Duration) × (3-Year
+              Portfolio Target))</span
+            >
+          </h3>
+          <div id="kpiOutstanding" class="text-2xl font-semibold mt-1">$0</div>
+        </div>
+        <div class="bg-white rounded-2xl shadow p-5">
+          <h3 class="text-sm font-medium text-slate-500 tooltip">
+            Break-even
+            <span class="tooltiptext"
+              >(1 − 1-Year Discount Rate) × (1 − 3-Year Portfolio Target) × (1Yr
+              WAD) + (1 − 3-Year Discount Rate) × (3-Year Portfolio Target) ×
+              (3Yr WAD)</span
+            >
+          </h3>
+          <div id="kpiBreakeven" class="text-2xl font-semibold mt-1">—</div>
+        </div>
+      </section>
 
-        const points = computeDailyOutstanding(rows /*, optional custom start date */);
-        if (points.length === 0) {
-          alert('No valid Active rows with End Time found.');
-          return;
-        }
-        renderLineChart(points);
+      <footer class="text-center text-xs text-slate-500 py-6">
+        v2.0 · Built for scenario testing & portfolio analysis
+      </footer>
+    </div>
+
+    <script>
+      // --- Original Calculator Logic ---
+      const fmtCurrency = (n) =>
+        n == null
+          ? '—'
+          : n.toLocaleString(undefined, {
+              style: 'currency',
+              currency: 'USD',
+              maximumFractionDigits: 0,
+            });
+
+      const el = {
+        monthlyUsage: document.getElementById('monthlyUsage'),
+        maxCoverage: document.getElementById('maxCoverage'),
+        maxCoverageNum: document.getElementById('maxCoverageNum'),
+        threeYrPortion: document.getElementById('threeYrPortion'),
+        threeYrPortionNum: document.getElementById('threeYrPortionNum'),
+        disc1: document.getElementById('disc1'),
+        disc3: document.getElementById('disc3'),
+        dur1: document.getElementById('dur1'),
+        dur3: document.getElementById('dur3'),
+        kpiMonthlyCommit: document.getElementById('kpiMonthlyCommit'),
+        kpiOutstanding: document.getElementById('kpiOutstanding'),
+        kpiBreakeven: document.getElementById('kpiBreakeven'),
+        csvFileInput: document.getElementById('csvFileInput'),
+        chartContainer: document.getElementById('chartContainer'),
       };
-      reader.readAsText(file);
-    });
-  }
-</script>
+
+      function calcTotalMonthlyCommitment({
+        monthlyUsage,
+        maxCoverageTarget,
+        disc1,
+        disc3,
+        threeYrPct,
+      }) {
+        const threeYrPortion = threeYrPct / 100;
+        const oneYrPortion = 1 - threeYrPortion;
+        const coverage = maxCoverageTarget / 100;
+        return (
+          monthlyUsage * coverage * (1 - disc1 / 100) * oneYrPortion +
+          monthlyUsage * coverage * (1 - disc3 / 100) * threeYrPortion
+        );
+      }
+
+      function calcTotalOutstanding({
+        totalMonthlyCommit,
+        dur1,
+        dur3,
+        threeYrPct,
+      }) {
+        const threeYrPortion = threeYrPct / 100;
+        const oneYrPortion = 1 - threeYrPortion;
+        return (
+          totalMonthlyCommit * (dur1 * oneYrPortion + dur3 * threeYrPortion)
+        );
+      }
+
+      function calcBreakeven({ disc1, disc3, threeYrPct, dur1, dur3 }) {
+        const threeYrPortion = threeYrPct / 100;
+        const oneYrPortion = 1 - threeYrPortion;
+        return (
+          (1 - disc1 / 100) * oneYrPortion * dur1 +
+          (1 - disc3 / 100) * threeYrPortion * dur3
+        );
+      }
+
+      function syncSliders(rangeEl, numberEl, updateFn) {
+        rangeEl.addEventListener('input', () => {
+          numberEl.value = rangeEl.value;
+          updateFn();
+        });
+        numberEl.addEventListener('input', () => {
+          let val = Number(numberEl.value);
+          if (isNaN(val)) val = 0;
+          val = Math.max(0, Math.min(100, val));
+          rangeEl.value = val;
+          numberEl.value = val;
+          updateFn();
+        });
+      }
+
+      function update() {
+        const monthlyUsage = Number(el.monthlyUsage.value) || 0;
+        const maxCoverageTarget = Number(el.maxCoverageNum.value) || 0;
+        const threeYrPct = Number(el.threeYrPortionNum.value) || 0;
+        const disc1 = Number(el.disc1.value) || 0;
+        const disc3 = Number(el.disc3.value) || 0;
+        const dur1 = Number(el.dur1.value) || 0;
+        const dur3 = Number(el.dur3.value) || 0;
+
+        const totalMonthlyCommit = calcTotalMonthlyCommitment({
+          monthlyUsage,
+          maxCoverageTarget,
+          disc1,
+          disc3,
+          threeYrPct,
+        });
+        const totalOutstanding = calcTotalOutstanding({
+          totalMonthlyCommit,
+          dur1,
+          dur3,
+          threeYrPct,
+        });
+        const breakeven = calcBreakeven({
+          disc1,
+          disc3,
+          threeYrPct,
+          dur1,
+          dur3,
+        });
+
+        el.kpiMonthlyCommit.textContent = fmtCurrency(totalMonthlyCommit);
+        el.kpiOutstanding.textContent = fmtCurrency(totalOutstanding);
+        el.kpiBreakeven.textContent = breakeven.toFixed(2) + ' months';
+      }
+
+      syncSliders(el.maxCoverage, el.maxCoverageNum, update);
+      syncSliders(el.threeYrPortion, el.threeYrPortionNum, update);
+      ['monthlyUsage', 'disc1', 'disc3', 'dur1', 'dur3'].forEach((id) => {
+        el[id].addEventListener('input', update);
+      });
+
+      // --- New CSV and Charting Logic ---
+
+      let commitmentChartInstance = null;
+      const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+      // Listen for file upload
+      el.csvFileInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const text = e.target.result;
+          try {
+            const data = parseCSV(text);
+            const chartData = calculateOutstandingOverTime(data);
+            renderChart(chartData);
+            el.chartContainer.style.display = 'block';
+          } catch (error) {
+            console.error('Error processing CSV:', error);
+            alert(
+              'Failed to parse CSV. Check console for details. Make sure it has the expected headers.'
+            );
+          }
+        };
+        reader.readAsText(file);
+      });
+
+      /**
+       * Parses CSV text into an array of objects.
+       * Assumes the first row is the header.
+       */
+      function parseCSV(text) {
+        const lines = text.trim().split('\n');
+        const headers = lines[0].split(',').map((h) => h.trim());
+        const data = [];
+
+        // Find required column indices
+        const stateIndex = headers.indexOf('State');
+        const feeIndex = headers.indexOf('Commitment Fee');
+        const endIndex = headers.indexOf('End Time');
+
+        if (stateIndex === -1 || feeIndex === -1 || endIndex === -1) {
+          throw new Error(
+            'CSV must contain "State", "Commitment Fee", and "End Time" columns.'
+          );
+        }
+
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(',');
+          if (values.length === headers.length) {
+            data.push({
+              State: values[stateIndex].trim(),
+              CommitmentFee: parseFloat(values[feeIndex]), // "0.01 $/hr" -> 0.01
+              EndTime: new Date(values[endIndex].trim()), // "2026-09-15"
+            });
+          }
+        }
+        return data;
+      }
+
+      /**
+       * Calculates the total outstanding commitment for each day
+       * from today until the last commitment expires.
+       */
+      function calculateOutstandingOverTime(data) {
+        const activeCommitments = data.filter(
+          (row) => row.State === 'Active' && !isNaN(row.EndTime.getTime())
+        );
+
+        if (activeCommitments.length === 0) {
+          return { labels: [], data: [] };
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Find the last expiration date
+        const maxEndDate = new Date(
+          Math.max(...activeCommitments.map((row) => row.EndTime.getTime()))
+        );
+
+        const labels = [];
+        const dataPoints = [];
+
+        // Loop from today until the last CUD expires
+        for (
+          let d = new Date(today.getTime());
+          d <= maxEndDate;
+          d.setDate(d.getDate() + 1)
+        ) {
+          let totalOutstandingForDate = 0;
+          const currentDate = new Date(d.getTime());
+
+          for (const commit of activeCommitments) {
+            if (commit.EndTime > currentDate) {
+              // Calculate remaining days
+              const diffTime = commit.EndTime.getTime() - currentDate.getTime();
+              const diffDays = Math.ceil(diffTime / MS_PER_DAY);
+              
+              // Formula: (hourly rate) * (days) * (24 hr/day)
+              totalOutstandingForDate += commit.CommitmentFee * diffDays * 24;
+            }
+          }
+
+          labels.push(currentDate);
+          dataPoints.push(totalOutstandingForDate);
+        }
+
+        return { labels, data: dataPoints };
+      }
+
+      /**
+       * Renders the line chart using Chart.js
+       */
+      function renderChart({ labels, data }) {
+        if (commitmentChartInstance) {
+          commitmentChartInstance.destroy();
+        }
+
+        const ctx = document.getElementById('commitmentChart').getContext('2d');
+        commitmentChartInstance = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Remaining Commitment Outstanding',
+                data: data,
+                borderColor: 'rgb(79, 70, 229)',
+                backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                type: 'time',
+                time: {
+                  unit: 'month',
+                  tooltipFormat: 'MM/dd/yyyy',
+                },
+                title: {
+                  display: true,
+                  text: 'Date',
+                },
+              },
+              y: {
+                title: {
+                  display: true,
+                  text: 'Outstanding Commitment ($)',
+                },
+                ticks: {
+                  callback: (value) => fmtCurrency(value),
+                },
+              },
+            },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: (context) =>
+                    `Outstanding: ${fmtCurrency(context.parsed.y)}`,
+                },
+              },
+            },
+          },
+        });
+      }
+
+      // Initial calculation for the hypothetical calculator
+      update();
+    </script>
+  </body>
+</html>
